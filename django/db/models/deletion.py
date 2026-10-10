@@ -231,10 +231,15 @@ class Collector:
     def related_objects(self, related, objs):
         """
         Get a QuerySet of objects related to `objs` via the relation `related`.
+
+        Only the primary key and the local FK column involved in the relation are
+        needed for cascade deletion. Loading the full row can pull in unrelated
+        text fields and trigger decode errors or unnecessary work even though
+        the delete logic does not need those columns.
         """
         return related.related_model._base_manager.using(self.using).filter(
             **{"%s__in" % related.field.name: objs}
-        )
+        ).only('pk', related.field.name)
 
     def instances_with_model(self):
         for model, instances in self.data.items():

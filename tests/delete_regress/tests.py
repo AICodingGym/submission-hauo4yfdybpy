@@ -2,6 +2,7 @@ import datetime
 
 from django.db import connection, models, transaction
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
+from django.test.utils import CaptureQueriesContext
 
 from .models import (
     Award, AwardNote, Book, Child, Contact, Eaten, Email, File, Food, FooFile,
@@ -84,6 +85,49 @@ class DeleteCascadeTests(TestCase):
         self.assertEqual(PlayedWith.objects.count(), 0)
         # first two asserts just sanity checks, this is the kicker:
         self.assertEqual(PlayedWithNote.objects.count(), 0)
+
+    def test_delete_cascade_only_uses_required_fields(self):
+        """Delete cascades must not fetch unrelated text columns."""
+        juan = Child.objects.create(name='Juan')
+        paints = Toy.objects.create(name='Paints')
+        played = PlayedWith.objects.create(
+            child=juan, toy=paints, date=datetime.date.today(),
+        )
+        PlayedWithNote.objects.create(played=played, note='the next Jackson Pollock')
+
+        with CaptureQueriesContext(connection) as ctx:
+            paints.delete()
+
+        self.assertEqual(PlayedWith.objects.count(), 0)
+        self.assertEqual(PlayedWithNote.objects.count(), 0)
+        self.assertFalse(any(
+            query['sql'].startswith('SELECT') and
+            'delete_regress_playedwithnote' in query['sql'] and
+            '"note"' in query['sql']
+            for query in ctx.captured_queries
+        ))
+
+    def test_delete_cascade_with_only_pk_query(self):
+        """Delete cascades are also safe when the queryset is restricted to pk."""
+        juan = Child.objects.create(name='Juan')
+        paints = Toy.objects.create(name='Paints')
+        played = PlayedWith.objects.create(
+            child=juan, toy=paints, date=datetime.date.today(),
+        )
+        PlayedWithNote.objects.create(played=played, note='the next Jackson Pollock')
+
+        with CaptureQueriesContext(connection) as ctx:
+            Toy.objects.filter(pk=paints.pk).only('id').delete()
+
+        self.assertEqual(Toy.objects.count(), 0)
+        self.assertEqual(PlayedWith.objects.count(), 0)
+        self.assertEqual(PlayedWithNote.objects.count(), 0)
+        self.assertFalse(any(
+            query['sql'].startswith('SELECT') and
+            'delete_regress_playedwithnote' in query['sql'] and
+            '"note"' in query['sql']
+            for query in ctx.captured_queries
+        ))
 
     def test_15776(self):
         policy = Policy.objects.create(pk=1, policy_number="1234")
