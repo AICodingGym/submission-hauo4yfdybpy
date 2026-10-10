@@ -141,3 +141,17 @@ class OrderedPerson(models.Model):
 
     class Meta:
         ordering = ['name']
+
+
+class UniqueTarget(models.Model):
+    unique_field = models.CharField(max_length=32, unique=True)
+
+
+class DeleteReferrer(models.Model):
+    origin = models.ForeignKey(
+        UniqueTarget,
+        on_delete=models.CASCADE,
+        to_field='unique_field',
+        db_column='unique_field',
+    )
+    payload = models.TextField()

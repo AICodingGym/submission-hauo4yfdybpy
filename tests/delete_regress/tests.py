@@ -5,10 +5,10 @@ from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 from django.test.utils import CaptureQueriesContext
 
 from .models import (
-    Award, AwardNote, Book, Child, Contact, Eaten, Email, File, Food, FooFile,
-    FooFileProxy, FooImage, FooPhoto, House, Image, Item, Location, Login,
-    OrderedPerson, OrgUnit, Person, Photo, PlayedWith, PlayedWithNote, Policy,
-    Researcher, Toy, Version,
+    Award, AwardNote, Book, Child, Contact, DeleteReferrer, Eaten, Email, File,
+    Food, FooFile, FooFileProxy, FooImage, FooPhoto, House, Image, Item,
+    Location, Login, OrderedPerson, OrgUnit, Person, Photo, PlayedWith,
+    PlayedWithNote, Policy, Researcher, Toy, UniqueTarget, Version,
 )
 
 
@@ -52,6 +52,63 @@ class DeleteLockingTest(TransactionTestCase):
             Book.objects.filter(pagecount__lt=250).delete()
 
         self.assertEqual(1, Book.objects.count())
+
+
+class DeletionTests(TestCase):
+    def test_only_referenced_fields_selected(self):
+        """Delete cascades should not fetch unrelated text columns."""
+        juan = Child.objects.create(name='Juan')
+        paints = Toy.objects.create(name='Paints')
+        played = PlayedWith.objects.create(
+            child=juan, toy=paints, date=datetime.date.today(),
+        )
+        PlayedWithNote.objects.create(played=played, note='the next Jackson Pollock')
+
+        with CaptureQueriesContext(connection) as ctx:
+            paints.delete()
+
+        self.assertEqual(PlayedWith.objects.count(), 0)
+        self.assertEqual(PlayedWithNote.objects.count(), 0)
+        self.assertFalse(any(
+            query['sql'].startswith('SELECT') and
+            'delete_regress_playedwithnote' in query['sql'] and
+            '"note"' in query['sql']
+            for query in ctx.captured_queries
+        ))
+
+    def test_only_referenced_fields_selected_for_custom_fk_db_column(self):
+        """Cascade deletes should select the actual FK database column, not the attribute ID."""
+        target = UniqueTarget.objects.create(unique_field='abc')
+        DeleteReferrer.objects.create(origin=target, payload='payload')
+
+        def noop(*args, **kwargs):
+            pass
+        models.signals.post_delete.connect(noop, sender=DeleteReferrer)
+        try:
+            with CaptureQueriesContext(connection) as ctx:
+                target.delete()
+
+            self.assertEqual(DeleteReferrer.objects.count(), 0)
+            self.assertTrue(any(
+                query['sql'].startswith('SELECT') and
+                'delete_regress_deletereferrer' in query['sql'] and
+                'unique_field' in query['sql']
+                for query in ctx.captured_queries
+            ))
+            self.assertFalse(any(
+                query['sql'].startswith('SELECT') and
+                'delete_regress_deletereferrer' in query['sql'] and
+                'origin_id' in query['sql']
+                for query in ctx.captured_queries
+            ))
+        finally:
+            models.signals.post_delete.disconnect(noop, sender=DeleteReferrer)
+        self.assertFalse(any(
+            query['sql'].startswith('SELECT') and
+            'delete_regress_deletereferrer' in query['sql'] and
+            'origin_id' in query['sql']
+            for query in ctx.captured_queries
+        ))
 
 
 class DeleteCascadeTests(TestCase):
