@@ -232,14 +232,14 @@ class Collector:
         """
         Get a QuerySet of objects related to `objs` via the relation `related`.
 
-        Only the primary key and the local FK database column involved in the
-        relation are needed for cascade deletion. Loading the full row can pull
-        in unrelated text fields and trigger decode errors or unnecessary work
-        even though the delete logic does not need those columns.
+        Only the primary key and the field on the related model that references
+        the source are needed for cascade deletion. Using the field name lets
+        Django resolve the correct database column, including custom
+        db_column values, without pulling in unrelated text fields.
         """
         return related.related_model._base_manager.using(self.using).filter(
             **{"%s__in" % related.field.name: objs}
-        ).only('pk', related.field.attname)
+        ).only('pk', related.field.name)
 
     def instances_with_model(self):
         for model, instances in self.data.items():
